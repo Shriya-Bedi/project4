@@ -1,4 +1,5 @@
 #!/usr/bin/env python3 
+#latest file
 
 import argparse, socket, time, json, select, struct, sys, math
 ENCODING = "ascii"
@@ -47,7 +48,7 @@ class Sender:
         self.socket.sendto(json.dumps(message).encode('utf-8'), (self.host, self.remote_port))
 
     def send_next_packet(self):
-        """Load and send next packet."""
+        #Load and send next packet.
         msg = {SEQN: self.sequence_number, DATA: "", ACK: False, EOF: False}
         overhead = len(json.dumps(msg))
         msg[DATA] = sys.stdin.read(DATA_SIZE - overhead)
@@ -90,7 +91,7 @@ class Sender:
             self.data_transmission_complete = True
 
     def retransmit_packet(self, sequence_number):
-        """Retransmit the packet with the given sequence number."""
+        #Retransmit the packet with the given sequence number.
         packet = self.sent_packets[sequence_number]
         msg = packet[MSG]
         if self.socket.sendto(json.dumps(msg).encode(ENCODING), self.destination) < len(msg):

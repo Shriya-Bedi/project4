@@ -1,0 +1,141 @@
+#!/usr/bin/env python3 
+
+import argparse, socket, time, json, select, struct, sys, math
+ENCODING = "ascii"
+
+MSG_SIZE = 1500
+TIMEOUT = 30
+
+##########################################################################
+
+# Message Fields
+SEQN = "sequence"
+DATA = "data"
+ACK = "ack"
+SACK = "sack"
+EOF = "eof"
+
+# Packet Fields
+MSG = "packet mesage"
+PST = "packet send time"
+PTO = "packet timeout"
+PRT = "packet retransmissions"
+
+##########################################################################
+
+ALPHA = 0.875
+ADVERTISED_WINDOW = 15
+HEARTBEAT = 0.1
+INITIAL_RTT = 0.1
+
+DATA_SIZE = 1375
+
+class Sender:
+    def __init__(self, host, port):
+        self.host = host
+        self.remote_port = int(port)
+        self.log("Sender starting up using port %s" % self.remote_port)
+        self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.socket.bind(('0.0.0.0', 0))
+        self.waiting = False
+
+    def log(self, message):
+        sys.stderr.write(message + "\n")
+        sys.stderr.flush()
+
+    def send(self, message):
+        self.socket.sendto(json.dumps(message).encode('utf-8'), (self.host, self.remote_port))
+
+    def send_next_packet(self):
+        """Load and send next packet."""
+        msg = {SEQN: self.sequence_number, DATA: "", ACK: False, EOF: False}
+        overhead = len(json.dumps(msg))
+        msg[DATA] = sys.stdin.read(DATA_SIZE - overhead)
+        if self.data_transmission_complete:
+            return
+        # If we have new data, send a packet with that data.
+        if len(msg[DATA]) > 0:
+            assert (len(msg) <= DATA_SIZE), f"ERROR: Datagram is longer ({len(msg)}) than {DATA_SIZE} bytes."
+
+            if self.socket.send(json.dumps(msg).encode(ENCODING), self.destination) < len(msg):
+                log("[error] unable to fully send packet")
+            else:
+                log(f"[send data] {self.sequence_number} ({len(msg[DATA])})")
+                packet_send_time = time.time()
+                packet_timeout = packet_send_time + (2 * self.rtt)
+                self.sent_packets[self.sequence_number] = {
+                    MSG: msg,
+                    PST: packet_send_time,
+                    PTO: packet_timeout,
+                    PRT: 0
+                }
+            self.sequence_number += len(msg[DATA])
+        else:
+            # Otherwise, send EOF packet.
+            eof_msg = {EOF: True, DATA: "", SEQN: self.sequence_number, ACK: False}
+            if self.socket.sendto(json.dumps(eof_msg).encode(ENCODING), self.destination) < len(eof_msg):
+                log("[error] unable to fully send packet")
+            else:
+                # log(f"[send eof] {self.sequence_number}")
+                log(f"[send data] {self.sequence_number} ({len(eof_msg)})")
+                packet_send_time = time.time()
+                packet_timeout = packet_send_time + (2 * self.rtt)
+                self.sent_packets[self.sequence_number] = {
+                    MSG: eof_msg,
+                    PST: packet_send_time,
+                    PTO: packet_timeout,
+                    PRT: 0
+                }
+            self.sock.sendto(json.dumps(eof_msg).encode(ENCODING), self.destination)
+            self.data_transmission_complete = True
+
+    def retransmit_packet(self, sequence_number):
+        """Retransmit the packet with the given sequence number."""
+        packet = self.sent_packets[sequence_number]
+        msg = packet[MSG]
+        if self.socket.sendto(json.dumps(msg).encode(ENCODING), self.destination) < len(msg):
+            log("[error] unable to fully send packet")
+        else:
+            log(f"[send data] {sequence_number} ({len(msg[DATA])})")
+            packet_send_time = time.time()
+            packet_retransmissions = packet[PRT] + 1
+            packet_timeout = packet_send_time + 2 * self.rtt * packet_retransmissions
+            self.sent_packets[sequence_number] = {
+                MSG: msg,
+                PST: packet_send_time,
+                PTO: packet_timeout,
+                PRT: packet_retransmissions
+            }
+
+    def run(self):
+        while True:
+            sockets = [self.socket, sys.stdin] if not self.waiting else [self.socket]
+
+            socks = select.select(sockets, [], [], 0.1)[0]
+            for conn in socks:
+                if conn == self.socket:
+                    k, addr = conn.recvfrom(65535)
+                    msg = k.decode('utf-8')
+
+                    self.log("Received message '%s'" % msg)
+                    self.waiting = False
+                elif conn == sys.stdin:
+                    data = sys.stdin.read(DATA_SIZE)
+                    if len(data) == 0:
+                        self.log("All done!")
+                        sys.exit(0)
+
+                    msg = { "type": "msg", "data": data }
+                    self.log("Sending message '%s'" % msg)
+                    self.send(msg)
+                    self.waiting = True
+
+        return
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='send data')
+    parser.add_argument('host', type=str, help="Remote host to connect to")
+    parser.add_argument('port', type=int, help="UDP port number to connect to")
+    args = parser.parse_args()
+    sender = Sender(args.host, args.port)
+    sender.run()
